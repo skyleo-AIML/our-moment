@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#080611">
+<title>Our Moment — Photo Made of Particles</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#080611}body{font-family:system-ui,-apple-system,Segoe UI,sans-serif}.stage{position:fixed;inset:0;overflow:hidden;display:grid;place-items:center;background:radial-gradient(ellipse at 50% 48%,#21112c 0%,#0b0814 55%,#030309 100%);padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}.frame{position:relative;width:100%;height:100%;overflow:hidden}.photo,.canvas{position:absolute;inset:0;width:100%;height:100%}.photo{object-fit:contain;opacity:0;visibility:hidden;z-index:1;pointer-events:none}.canvas{z-index:2;pointer-events:none}.shade{position:absolute;inset:0;z-index:3;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(2,2,8,.24) 100%)}.controls{position:absolute;z-index:4;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));display:flex;gap:8px}button{appearance:none;border:1px solid #ffffff48;border-radius:99px;padding:10px 15px;background:#100b1bd9;color:#fff;font:500 14px system-ui;touch-action:manipulation;cursor:pointer}button:active{transform:scale(.97)}@media(max-width:600px){.controls{right:max(10px,env(safe-area-inset-right));bottom:max(10px,env(safe-area-inset-bottom));gap:6px}button{padding:10px 13px;font-size:13px}.shade{background:radial-gradient(ellipse at center,transparent 62%,rgba(2,2,8,.16) 100%)}}@media(prefers-reduced-motion:reduce){.photo{transition:none}}
+</style>
+</head>
+<body>
+<main class="stage"><section class="frame" id="frame">
+<img class="photo" id="photo" src="your_photo.png" alt="The original photo" draggable="false">
+<canvas class="canvas" id="canvas" aria-hidden="true"></canvas><div class="shade"></div>
+<div class="controls"><button id="replay" type="button">↻ Replay</button><button id="pause" type="button">Ⅱ Pause</button></div>
+</section></main>
+<script>
+(()=>{'use strict';
+const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d',{alpha:true}),photo=document.getElementById('photo'),replay=document.getElementById('replay'),pause=document.getElementById('pause');
+const reduced=window.matchMedia('(prefers-reduced-motion: reduce)');
+let W=0,H=0,DPR=1,particles=[],sparks=[],raf=0,running=false,startTime=0,elapsedBeforePause=0,finished=false,resizeTimer=0;
+const duration=5600, clamp=(v,a=0,b=1)=>Math.max(a,Math.min(b,v));
+const smooth=t=>t*t*t*(t*(t*6-15)+10); // quintic easing: smooth start and stop
+function setupCanvas(){DPR=Math.min(window.devicePixelRatio||1,1.35);W=innerWidth;H=innerHeight;canvas.width=Math.round(W*DPR);canvas.height=Math.round(H*DPR);canvas.style.width=W+'px';canvas.style.height=H+'px';ctx.setTransform(DPR,0,0,DPR,0,0);}
+function buildParticles(){if(!photo.naturalWidth)return;setupCanvas();const iw=photo.naturalWidth,ih=photo.naturalHeight,scale=Math.min(W/iw,H/ih),dw=iw*scale,dh=ih*scale,ox=(W-dw)/2,oy=(H-dh)/2;
+ // A bounded, responsive sampling grid keeps image detail without overloading phones.
+const mobile = W < 700 || ('ontouchstart' in window), maxCount = mobile ? 8000 : 22000;
+ // Round the sampling step UP so the grid stays within the particle budget.
+ const step = Math.max(2, Math.ceil(Math.sqrt((iw * ih) / maxCount)));
+ const off = document.createElement('canvas');
+ off.width = Math.max(1, Math.ceil(iw / step));
+ off.height = Math.max(1, Math.ceil(ih / step));
+ const oc = off.getContext('2d', { willReadFrequently: true });
+ oc.drawImage(photo, 0, 0, off.width, off.height);
+ const pixels = oc.getImageData(0, 0, off.width, off.height).data;
+ const sw = off.width, sh = off.height;
+ particles = [];
+ // Keep the original photo's sampled pixel colors; faces are never redrawn or replaced.
+ for(let y=0;y<sh;y++){for(let x=0;x<sw;x++){if(particles.length>=maxCount)break;const i=(y*sw+x)*4,r=pixels[i],g=pixels[i+1],b=pixels[i+2],a=pixels[i+3];if(a<30)continue;const tx=ox+(x+.5)*step*scale,ty=oy+(y+.5)*step*scale;const seed=(x*127.1+y*311.7)%6283/1000;const angle=(particles.length*2.399963)+seed*.3;const radius=Math.hypot(W,H)*(.36+((particles.length*0.61803398875)%1)*.48);const startX=W/2+Math.cos(angle)*radius,startY=H/2+Math.sin(angle)*radius;particles.push({tx,ty,r,g,b,a:a/255,sx:startX,sy:startY,delay:clamp((x/sw)*.08+(y/sh)*.13+Math.random()*.12,0,.28),size: (mobile ? 0.9 : 1.05) + Math.random() * (mobile ? 0.4 : 0.55),seed,twinkle:Math.random()*6.28});}}
+ // Separate decorative sparks are intentionally few and cheap to render.
+ const sparkCount=mobile?42:100;sparks=Array.from({length:sparkCount},()=>({x:Math.random()*W,y:Math.random()*H,phase:Math.random()*6.28,speed:.18+Math.random()*.55,size:.45+Math.random()*1.35,hot:Math.random()}));
+}
+function draw(now){if(!running)return;if(!startTime)startTime=now-elapsedBeforePause;const progress=clamp((now-startTime)/duration);ctx.clearRect(0,0,W,H);
+ // Quantized color buckets allow Canvas to draw many dots per path (much lighter than per-dot shadows).
+ const buckets=new Map();for(const p of particles){const local=clamp((progress-p.delay)/(1-p.delay));const e=smooth(local);const sway=(1-e)*Math.sin(now*.00065+p.seed)*Math.min(5,W*.007);const curl=(1-e)*Math.cos(now*.00058+p.seed)*Math.min(4,H*.008);const x=p.sx+(p.tx-p.sx)*e+sway,y=p.sy+(p.ty-p.sy)*e+curl;const lum=(p.r+p.g+p.b)/3;const size=p.size*(.82+.18*Math.sin(now*.0014+p.twinkle));const alpha=p.a*(.25+.75*local);const rr=Math.min(255,Math.round(p.r+(lum>205?18:0))),gg=Math.min(255,Math.round(p.g+(lum>205?8:0))),bb=Math.min(255,Math.round(p.b+(lum>205?22:0)));const aq=Math.max(1,Math.min(10,Math.round(alpha*10)));const key=(((rr>>4)<<12)|((gg>>4)<<8)|((bb>>4)<<4)|aq);let bucket=buckets.get(key);if(!bucket){bucket={r:rr>>4<<4,g:gg>>4<<4,b:bb>>4<<4,a:aq/10,items:[]};buckets.set(key,bucket)}bucket.items.push([x,y,size]);}
+ for(const b of buckets.values()){ctx.globalAlpha=b.a;ctx.fillStyle=`rgb(${b.r},${b.g},${b.b})`;ctx.beginPath();for(const d of b.items){ctx.moveTo(d[0]+d[2],d[1]);ctx.arc(d[0],d[1],d[2],0,Math.PI*2)}ctx.fill();}ctx.globalAlpha=1;
+ // Tiny additive highlights create a realistic sparkling edge without blurring every dot.
+ ctx.globalCompositeOperation='lighter';for(let i=0;i<particles.length;i+=9){const p=particles[i],local=clamp((progress-p.delay)/(1-p.delay));if(local<.35)continue;const pulse=.25+.75*(.5+.5*Math.sin(now*.003+p.twinkle));const x=p.tx,y=p.ty;ctx.globalAlpha = (local - 0.25) * 0.48 * pulse;ctx.fillStyle=(p.r>150&&p.b>90)?'#ff75e8':'#ffd5f8';ctx.beginPath();ctx.arc(x,y,p.size*1.65,0,Math.PI*2);ctx.fill();}ctx.globalAlpha=1;
+ // Floating ambient particles drift slowly around the portrait.
+ for(const s of sparks){const x=(s.x+Math.sin(now*.00022*s.speed+s.phase)*17+W)%W;const y=(s.y-now*.012*s.speed+H*2)%H;const pulse=.45+.55*Math.sin(now*.002*s.speed+s.phase)**2;ctx.globalAlpha=pulse*(.45+.45*s.hot);ctx.fillStyle=s.hot>.6?'#ff75df':'#b9a5ff';ctx.beginPath();ctx.arc(x,y,s.size,0,Math.PI*2);ctx.fill();}ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+ // Soft ambient halo is drawn once per frame, not once per particle.
+ if(progress<.98){const halo=ctx.createRadialGradient(W*.5,H*.52,0,W*.5,H*.52,Math.min(W,H)*.48);halo.addColorStop(0,`rgba(255,58,207,${.065*(1-progress)})`);halo.addColorStop(1,'rgba(115,48,255,0)');ctx.fillStyle=halo;ctx.fillRect(0,0,W,H);}
+ if(progress>=1){finished=true;running=false;pause.textContent='↻ Replay';return;}raf=requestAnimationFrame(draw);}
+function play(){if(!photo.naturalWidth)return;cancelAnimationFrame(raf);buildParticles();ctx.clearRect(0,0,W,H);photo.classList.remove('visible');running=true;finished=false;elapsedBeforePause=0;startTime=0;pause.textContent='Ⅱ Pause';if(reduced.matches){running=false;drawStaticDots();return;}raf=requestAnimationFrame(draw);}
+function drawStaticDots(){ctx.clearRect(0,0,W,H);const buckets=new Map();for(const p of particles){const key=`${p.r>>4},${p.g>>4},${p.b>>4}`;if(!buckets.has(key))buckets.set(key,{color:`rgb(${p.r},${p.g},${p.b})`,items:[]});buckets.get(key).items.push(p)}for(const b of buckets.values()){ctx.fillStyle=b.color;ctx.beginPath();for(const p of b.items){ctx.moveTo(p.tx+p.size,p.ty);ctx.arc(p.tx,p.ty,p.size,0,Math.PI*2)}ctx.fill()}ctx.globalAlpha=1;}
+function onPause(){if(running){running=false;cancelAnimationFrame(raf);raf=0;elapsedBeforePause=startTime?performance.now()-startTime:0;pause.textContent='▶ Resume';}else if(!finished){running=true;startTime=performance.now()-elapsedBeforePause;pause.textContent='Ⅱ Pause';raf=requestAnimationFrame(draw);}else play();}
+photo.addEventListener('load',play,{once:true});photo.addEventListener('error',()=>{pause.textContent='Image missing';pause.disabled=true});replay.addEventListener('click',play);pause.addEventListener('click',onPause);
+window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{const wasRunning=running;cancelAnimationFrame(raf);running=false;buildParticles();ctx.clearRect(0,0,W,H);if(wasRunning&&!finished){running=true;startTime=performance.now()-elapsedBeforePause;raf=requestAnimationFrame(draw);}else if(finished)drawStaticDots();},180);},{passive:true});
+if(photo.complete&&photo.naturalWidth)play();
+})();
+</script>
+</body></html>
